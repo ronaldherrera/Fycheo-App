@@ -1,20 +1,27 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Fycheo App
 
-# Run and deploy your AI Studio app
+Aplicación móvil (Web/PWA) para el registro y control de jornada laboral de los empleados.
 
-This contains everything you need to run your app locally
+## Tecnologías
+- **Frontend:** React, TypeScript, Vite.
+- **Backend:** Supabase.
+- **Estilos:** TailwindCSS.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1XL8ObJ7mF-dqfQ-WhLtzBHInySFdaFYa
+## Configuración Local
 
-## Run Locally
+1. Instalar dependencias:
+   ```bash
+   npm install
+   ```
 
-**Prerequisites:**  Node.js
+2. Configurar variables de entorno:
+   Asegúrate de tener el archivo `.env` configurado con las credenciales de Supabase.
 
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+3. Iniciar servidor:
+   ```bash
+   npm run dev
+   ```
+   
+   La aplicación estará disponible en:
+   - **Local:** `http://localhost:3000`
+   - **Red:** `http://[IP-LOCAL]:3000`
