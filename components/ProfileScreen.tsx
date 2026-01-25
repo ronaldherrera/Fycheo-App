@@ -774,10 +774,12 @@ const ProfileScreen: React.FC = () => {
       <div className="w-full">
         <div className="flex p-4 flex-col items-center pt-8">
           <div className="relative group cursor-pointer">
-            <div 
-              className="bg-center bg-no-repeat aspect-square bg-cover rounded-full h-28 w-28 ring-4 ring-background-light dark:ring-background-dark shadow-lg relative" 
-              style={{backgroundImage: `url("${user.user_metadata?.avatar_url || DEFAULT_AVATAR}")`}}
-            >
+            <div className="relative">
+              <img 
+                src={user.user_metadata?.avatar_url || DEFAULT_AVATAR}
+                alt="Perfil"
+                className="aspect-square rounded-full h-28 w-28 object-cover ring-4 ring-background-light dark:ring-background-dark shadow-lg"
+              />
               {uploading && (
                 <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center">
                   <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

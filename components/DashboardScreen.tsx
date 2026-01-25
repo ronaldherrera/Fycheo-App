@@ -1060,13 +1060,12 @@ const DashboardScreen: React.FC = () => {
         </div>
 
         {/* Derecha: Avatar */}
-        <div
+        <img
+          src={user.user_metadata?.avatar_url || DEFAULT_AVATAR}
+          alt="Perfil"
           onClick={() => navigate("/profile")}
-          className="bg-center bg-no-repeat bg-cover rounded-full size-10 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all"
-          style={{
-            backgroundImage: `url("${user.user_metadata?.avatar_url || DEFAULT_AVATAR}")`,
-          }}
-        ></div>
+          className="rounded-full size-10 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all object-cover"
+        />
       </header>
 
       {/* AVISOS */}

@@ -38,4 +38,3 @@ jobs:
           local-dir: ./dist/
           server-dir: ${{ secrets.HOSTINGER_TARGET }}
           protocol: ftps
-          strict: false
