@@ -158,6 +158,68 @@ const ProfileScreen: React.FC = () => {
       }
   };
 
+  const handleAcceptInviteProfile = async () => {
+    if (!company) return;
+    try {
+      setLinkingCompany(true);
+      const { error: memberError } = await supabase
+        .from('company_members')
+        .update({ accepted: true })
+        .eq('user_id', user.id)
+        .eq('company_id', company.id);
+
+      if (memberError) throw memberError;
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          company_id: company.id,
+          role: 'employee'
+        })
+        .eq('id', user.id);
+
+      if (profileError) {
+        console.error("Error updating profile with accepted company:", profileError);
+      }
+
+      setMessage({ type: 'success', text: `¡Te has unido a ${company.name}! 🎉` });
+      setIsPendingInvite(false);
+      await loadCompanyInfo();
+    } catch (e: any) {
+      console.error(e);
+      setMessage({ type: 'error', text: e.message || 'Error al aceptar la invitación.' });
+    } finally {
+      setLinkingCompany(false);
+    }
+  };
+
+  const handleRejectInviteProfile = async () => {
+    if (!company) return;
+    if (!window.confirm(`¿Estás seguro de que deseas rechazar la invitación de la empresa "${company.name}"?`)) {
+      return;
+    }
+
+    try {
+      setUnlinkingCompany(true);
+      const { error: memberError } = await supabase
+        .from('company_members')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('company_id', company.id);
+
+      if (memberError) throw memberError;
+
+      setMessage({ type: 'success', text: `Invitación rechazada.` });
+      setCompany(null);
+      setIsPendingInvite(false);
+    } catch (e: any) {
+      console.error(e);
+      setMessage({ type: 'error', text: e.message || 'Error al rechazar la invitación.' });
+    } finally {
+      setUnlinkingCompany(false);
+    }
+  };
+
   const handleExport = async (format: 'csv' | 'pdf') => {
     try {
       setIsExporting(true);
@@ -573,6 +635,129 @@ const ProfileScreen: React.FC = () => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [tempName, setTempName] = useState('');
 
+  // Company state
+  const [company, setCompany] = useState<{ id: string; name: string; role: string } | null>(null);
+  const [loadingCompany, setLoadingCompany] = useState(true);
+  const [linkingCompany, setLinkingCompany] = useState(false);
+  const [unlinkingCompany, setUnlinkingCompany] = useState(false);
+  const [isPendingInvite, setIsPendingInvite] = useState(false);
+  const [teamName, setTeamName] = useState<string | null>(null);
+  const [companyManagers, setCompanyManagers] = useState<Array<{ name: string; email: string; role: string }>>([]);
+
+  const loadCompanyInfo = async () => {
+    try {
+      setLoadingCompany(true);
+      setTeamName(null);
+      setCompanyManagers([]);
+      if (!user) return;
+
+      const { data: memberData, error: memberError } = await supabase
+        .from('company_members')
+        .select('company_id, role, accepted, team_id, companies:company_id(name)')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (memberError) {
+        console.error("Error loading company membership:", memberError);
+        return;
+      }
+
+      if (memberData) {
+        const companiesObj = Array.isArray(memberData.companies) 
+          ? memberData.companies[0] 
+          : memberData.companies;
+
+        setCompany({
+          id: memberData.company_id,
+          name: companiesObj?.name || 'Empresa sin nombre',
+          role: memberData.role
+        });
+        setIsPendingInvite(memberData.accepted === false);
+
+        // 1. Obtener nombre del equipo si está asignado
+        if (memberData.team_id) {
+          const { data: teamData, error: teamError } = await supabase
+            .from('teams')
+            .select('name')
+            .eq('id', memberData.team_id)
+            .maybeSingle();
+          
+          if (!teamError && teamData) {
+            setTeamName(teamData.name);
+          }
+        }
+
+        // 2. Obtener gestores de la empresa
+        if (memberData.accepted !== false) {
+          console.log("loadCompanyInfo - Querying managers for company:", memberData.company_id);
+          const { data: membersData, error: membersError } = await supabase
+            .from('company_members')
+            .select('role, team_id, profiles:user_id(full_name, email)')
+            .eq('company_id', memberData.company_id)
+            .in('role', ['admin', 'hr', 'manager']);
+
+          if (membersError) {
+            console.error("loadCompanyInfo - Error loading company managers:", membersError);
+          } else {
+            console.log("loadCompanyInfo - Loaded managers raw data:", membersData);
+          }
+
+          if (!membersError && membersData) {
+            const managers = membersData
+              .filter((m: any) => {
+                if (m.role === 'admin' || m.role === 'hr') return true;
+                if (m.role === 'manager' && m.team_id && m.team_id === memberData.team_id) return true;
+                return false;
+              })
+              .map((m: any) => {
+                const profile = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles;
+                return {
+                  name: profile?.full_name || profile?.email?.split('@')[0] || 'Gestor',
+                  email: profile?.email || '',
+                  role: m.role
+                };
+              });
+            setCompanyManagers(managers);
+          }
+        }
+      } else {
+        setCompany(null);
+        setIsPendingInvite(false);
+      }
+    } catch (err) {
+      console.error("Error loading company info:", err);
+    } finally {
+      setLoadingCompany(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCompanyInfo();
+
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('company_members_profile')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'company_members',
+          filter: `user_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          console.log("Realtime change detected in company_members (Profile):", payload);
+          await loadCompanyInfo();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
   useEffect(() => {
     if (message) {
       const timer = setTimeout(() => {
@@ -845,18 +1030,35 @@ const ProfileScreen: React.FC = () => {
                             setMessage({ type: 'error', text: 'El nombre no puede estar vacío' });
                             return;
                           }
+                          
+                          // 1. Actualizar metadatos de autenticación
                           const { data, error } = await supabase.auth.updateUser({
                             data: { full_name: tempName }
                           });
+                          
                           if (error) {
                             setMessage({ type: 'error', text: error.message });
-                          } else {
-                            if (data.user) {
-                              setUser(data.user);
-                            }
-                            setMessage({ type: 'success', text: 'Nombre actualizado' });
-                            setIsEditingName(false);
+                            return;
                           }
+
+                          // 2. Sincronizar con la tabla pública profiles
+                          const { error: profileError } = await supabase
+                            .from('profiles')
+                            .update({ 
+                              full_name: tempName,
+                              name: tempName
+                            })
+                            .eq('id', user.id);
+
+                          if (profileError) {
+                            console.error("Error updating public profile name:", profileError);
+                          }
+
+                          if (data.user) {
+                            setUser(data.user);
+                          }
+                          setMessage({ type: 'success', text: 'Nombre actualizado' });
+                          setIsEditingName(false);
                         }}
                         className="p-1 text-green-500 hover:text-green-600 transition-colors cursor-pointer border-none bg-transparent"
                       >
@@ -1172,8 +1374,6 @@ const ProfileScreen: React.FC = () => {
         </div>
       </div>
 
-
-
         <div className="mt-6">
           <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Resumen Anual</h3>
           <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
@@ -1260,21 +1460,126 @@ const ProfileScreen: React.FC = () => {
         <div className="mt-6">
           <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Empresa</h3>
           <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
-            <button 
-              onClick={() => setMessage({ type: 'info', text: 'Esta opción aún no está disponible' })}
-              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <div className="size-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500">
-                  <span className="material-symbols-outlined text-[20px]">business</span>
+            {loadingCompany ? (
+              <div className="w-full flex items-center justify-center py-5">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-500"></div>
+              </div>
+            ) : company ? (
+              <div className="w-full divide-y divide-gray-100 dark:divide-border-dark/50">
+                <div className="flex items-center justify-between px-4 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="size-8 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-500">
+                      <span className="material-symbols-outlined text-[20px]">business</span>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-slate-900 dark:text-white font-bold text-base">{company.name}</span>
+                      <span className="text-xs text-text-secondary">
+                        {teamName ? `Equipo: ${teamName}` : 'Sin equipo asignado'}
+                      </span>
+                    </div>
+                  </div>
+                  {isPendingInvite ? (
+                    <span className="inline-flex items-center py-1 px-2.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-500">
+                      Invitación Recibida
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center py-1 px-2.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500">
+                      Conectado
+                    </span>
+                  )}
                 </div>
-                <div className="flex flex-col">
-                  <span className="text-slate-900 dark:text-white font-medium text-base">Vincular Empresa</span>
-                  <span className="text-xs text-text-secondary">Conectar con un espacio de trabajo</span>
+
+                {/* Listado de Gestores Autorizados */}
+                {!isPendingInvite && companyManagers.length > 0 && (
+                  <div className="px-4 py-3.5 bg-slate-50 dark:bg-slate-900/30 flex flex-col gap-2">
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
+                      Gestores autorizados (RRHH / Administradores)
+                    </span>
+                    <div className="flex flex-col gap-2 mt-1">
+                      {companyManagers.map((mgr, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs border-b border-gray-100 dark:border-border-dark/30 last:border-0 pb-1.5 last:pb-0">
+                          <div className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-[18px] text-slate-400">person</span>
+                            <div className="flex flex-col">
+                              <span className="text-slate-800 dark:text-slate-200 font-bold">{mgr.name}</span>
+                              {mgr.email && (
+                                <span className="text-[10px] text-slate-400">{mgr.email}</span>
+                              )}
+                            </div>
+                          </div>
+                          <span className="text-[9px] bg-indigo-500/10 text-indigo-500 dark:text-indigo-300 font-bold px-2 py-0.5 rounded-md self-center">
+                            {mgr.role === 'admin' ? 'Administrador' : mgr.role === 'hr' ? 'RRHH' : 'Responsable'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[9px] text-slate-400 dark:text-slate-500 mt-1 leading-relaxed">
+                      Estas personas tienen permisos para supervisar, aprobar y editar tus registros de jornada laboral.
+                    </p>
+                  </div>
+                )}
+                
+                {isPendingInvite && (
+                  <div className="flex gap-2 p-3 bg-slate-50 dark:bg-slate-900/40">
+                    <button 
+                      onClick={handleAcceptInviteProfile}
+                      disabled={linkingCompany}
+                      className="flex-1 py-2 px-3 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-colors border-none cursor-pointer flex items-center justify-center gap-1 disabled:opacity-50"
+                    >
+                      {linkingCompany ? (
+                        <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined text-[14px]">check</span>
+                          Aceptar
+                        </>
+                      )}
+                    </button>
+                    <button 
+                      onClick={handleRejectInviteProfile}
+                      disabled={unlinkingCompany}
+                      className="flex-1 py-2 px-3 rounded-lg text-xs font-bold text-red-600 dark:text-red-400 bg-red-500/10 hover:bg-red-500/20 transition-colors border-none cursor-pointer flex items-center justify-center gap-1 disabled:opacity-50"
+                    >
+                      {unlinkingCompany ? (
+                        <div className="w-3.5 h-3.5 border-2 border-red-500/30 border-t-red-500 rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined text-[14px]">close</span>
+                          Rechazar
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-5 flex flex-col gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="size-8 rounded-full bg-slate-500/10 flex items-center justify-center text-slate-400">
+                    <span className="material-symbols-outlined text-[20px]">cloud_off</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-slate-900 dark:text-white font-bold text-base">Cuenta Independiente</span>
+                    <span className="text-xs text-text-secondary">Sin vinculación activa</span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800/50 space-y-3">
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    No estás conectado a ninguna empresa. Puedes usar la app para registrar tus fichajes de forma local y generar tus propios informes.
+                  </p>
+                  <div className="border-t border-slate-100 dark:border-slate-800/50 pt-2.5">
+                    <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 block mb-1">
+                      ¿Tu empresa usa Fycheo?
+                    </span>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">
+                      Pide a tu responsable de RRHH o administrador que te invite a la organización usando tu correo: <strong className="text-slate-700 dark:text-slate-300 font-semibold">{user.email}</strong>. 
+                      Recibirás la invitación en tu aplicación para vincularte al instante.
+                    </p>
+                  </div>
                 </div>
               </div>
-              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
-            </button>
+            )}
           </div>
         </div>
 

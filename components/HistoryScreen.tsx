@@ -83,9 +83,26 @@ const HistoryScreen: React.FC = () => {
   // Custom Error Modal State
   const [errorModalOpen, setErrorModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-  
+  const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
 
+  useEffect(() => {
+    const fetchActiveCompany = async () => {
+      if (!user?.id) return;
+      const { data } = await supabase
+        .from('company_members')
+        .select('company_id')
+        .eq('user_id', user.id)
+        .eq('accepted', true)
+        .maybeSingle();
 
+      if (data) {
+        setActiveCompanyId(data.company_id);
+      } else {
+        setActiveCompanyId(null);
+      }
+    };
+    fetchActiveCompany();
+  }, [user?.id]);
 
   useEffect(() => {
     const fetchHistory = async () => {
@@ -99,7 +116,7 @@ const HistoryScreen: React.FC = () => {
 
       const { data, error } = await supabase
         .from('time_entries')
-        .select('*')
+        .select('*, companies:company_id(name)')
         .eq('user_id', user.id)
         .gte('occurred_at', start)
         .lte('occurred_at', end)
@@ -119,7 +136,7 @@ const HistoryScreen: React.FC = () => {
         .eq('user_id', user.id)
         .order('occurred_at', { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
       
       if (latestData) {
          setLatestGlobalId(latestData.id);
@@ -287,7 +304,7 @@ const HistoryScreen: React.FC = () => {
              .lt('occurred_at', entry.occurred_at) // Strictly before
              .order('occurred_at', { ascending: false })
              .limit(1)
-             .single();
+             .maybeSingle();
            
            if (prevDb) {
               minT = prevDb.occurred_at ? new Date(prevDb.occurred_at) : new Date(prevDb.created_at);
@@ -311,7 +328,7 @@ const HistoryScreen: React.FC = () => {
              .gt('occurred_at', entry.occurred_at) // Strictly after
              .order('occurred_at', { ascending: true })
              .limit(1)
-             .single();
+             .maybeSingle();
              
            if (nextDb) {
               maxT = nextDb.occurred_at ? new Date(nextDb.occurred_at) : new Date(nextDb.created_at);
@@ -377,7 +394,7 @@ const HistoryScreen: React.FC = () => {
           .lt('occurred_at', startAt.toISOString())
           .order('occurred_at', { ascending: false })
           .limit(1)
-          .single();
+          .maybeSingle();
 
        const isWorkingState = (type: string) => 
           ['clock-in', 'break-end', 'others-in'].includes(type);
@@ -400,7 +417,7 @@ const HistoryScreen: React.FC = () => {
           .gt('occurred_at', endAt.toISOString())
           .order('occurred_at', { ascending: true })
           .limit(1)
-          .single();
+          .maybeSingle();
 
        if (nextToEnd) {
            if (isWorkingState(nextToEnd.entry_type)) {
@@ -424,7 +441,8 @@ const HistoryScreen: React.FC = () => {
           occurred_at: startAt.toISOString(),
           date: formDate,
           entry_time: formTime,
-          minutes: 0
+          minutes: 0,
+          company_id: activeCompanyId
        });
        if (err1) error = err1;
        else {
@@ -436,7 +454,8 @@ const HistoryScreen: React.FC = () => {
             occurred_at: endAt.toISOString(),
             date: formDate,
             entry_time: formTimeEnd,
-            minutes: 0
+            minutes: 0,
+            company_id: activeCompanyId
          });
          error = err2;
        }
@@ -472,7 +491,7 @@ const HistoryScreen: React.FC = () => {
             .lt('occurred_at', occurredAt.toISOString())
             .order('occurred_at', { ascending: false })
             .limit(1)
-            .single();
+            .maybeSingle();
 
          // 2. Fetch Next Entry
          const { data: nextEntry } = await supabase
@@ -482,7 +501,7 @@ const HistoryScreen: React.FC = () => {
             .gt('occurred_at', occurredAt.toISOString())
             .order('occurred_at', { ascending: true })
             .limit(1)
-            .single();
+            .maybeSingle();
 
          const isWorkingState = (type: string) => 
             ['clock-in', 'break-end', 'others-in'].includes(type);
@@ -528,15 +547,19 @@ const HistoryScreen: React.FC = () => {
          }
       }
 
-      const payload = {
+      const payload: any = {
         user_id: user.id,
         entry_type: entryType,
         description: (entryType === 'others-in' || entryType === 'others-out') ? context : (typeMeta(entryType).label),
         occurred_at: occurredAt.toISOString(),
         date: formDate, // Legacy/Redundant
         entry_time: formTime, // Legacy
-        minutes: 0 
+        minutes: 0
       };
+
+      if (!editingEntry) {
+        payload.company_id = activeCompanyId;
+      }
 
       if (editingEntry) {
         // Update
@@ -960,7 +983,14 @@ const HistoryScreen: React.FC = () => {
                       <span className={`material-symbols-outlined text-xl ${c.iconText}`}>{meta.icon}</span>
                     </div>
                     <div className="flex-1">
-                      <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">{displayLabel}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">{displayLabel}</p>
+                        {e.companies?.name && (
+                          <span className="text-[9px] font-bold bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 dark:bg-indigo-500/20 px-1.5 py-0.5 rounded-md leading-none">
+                            {e.companies.name}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">{timeCell} • {meta.label}</p>
                     </div>
                     <div className="flex items-center gap-2">

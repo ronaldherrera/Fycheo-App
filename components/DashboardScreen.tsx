@@ -13,7 +13,9 @@ import { useNavigate } from "react-router-dom";
 import { AppContext } from "../App";
 import { supabase } from "../services/supabase";
 import { DEFAULT_AVATAR } from "../constants";
-import { Logo } from "./Logo"; // Nuevo import
+import { Logo } from "./Logo";
+import ChatPanel from "./ChatPanel";
+import TasksPanel from "./TasksPanel";
 
 type EntryType =
   | "clock-in"
@@ -192,6 +194,61 @@ const DashboardScreen: React.FC = () => {
   const [liveMode, setLiveMode] = useState<"working" | "break" | "out" | "others">("out");
   const [liveModeSince, setLiveModeSince] = useState<Date>(new Date());
 
+  // Estado de vinculación de empresa
+  const [hasCompany, setHasCompany] = useState<boolean>(true);
+  const [loadingCompanyCheck, setLoadingCompanyCheck] = useState<boolean>(true);
+  const [pendingInvite, setPendingInvite] = useState<{ companyId: string; companyName: string } | null>(null);
+  const [respondingInvite, setRespondingInvite] = useState<boolean>(false);
+  const [activeCompanyId, setActiveCompanyId] = useState<string | null>(null);
+  const [activeCompanyName, setActiveCompanyName] = useState<string | null>(null);
+
+  // Chat efímero
+  const [showChatPanel, setShowChatPanel] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+
+  // Panel de Tareas
+  const [showTasksPanel, setShowTasksPanel] = useState(false);
+  const [pendingTasksCount, setPendingTasksCount] = useState(0);
+
+  // Conteo de compañeros trabajando ahora
+  const [workingCount, setWorkingCount] = useState(0);
+
+  // Cargar conteo de tareas pendientes al montar (para el badge)
+  useEffect(() => {
+    if (!user?.id) return;
+    supabase
+      .from('tasks')
+      .select('id', { count: 'exact', head: true })
+      .eq('assigned_to', user.id)
+      .eq('status', 'pending')
+      .then(({ count }) => setPendingTasksCount(count ?? 0));
+  }, [user?.id]);
+
+  // Cargar compañeros trabajando ahora
+  useEffect(() => {
+    if (!user?.id || !activeCompanyId) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    supabase
+      .from('time_entries')
+      .select('user_id, entry_type')
+      .eq('company_id', activeCompanyId)
+      .gte('created_at', today + 'T00:00:00')
+      .neq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (!data) return;
+        // Keep only last entry per user
+        const lastByUser = new Map<string, string>();
+        for (const e of data) {
+          if (!lastByUser.has(e.user_id)) lastByUser.set(e.user_id, e.entry_type);
+        }
+        const working = [...lastByUser.values()].filter(t => t === 'clock-in' || t === 'others-in').length;
+        setWorkingCount(working);
+      });
+  }, [user?.id, activeCompanyId]);
+
 
   // --- Estado lógico según últimos fichajes (para validar acciones) ---
   const currentMode = useMemo<"working" | "break" | "out" | "others">(() => {
@@ -363,9 +420,9 @@ const DashboardScreen: React.FC = () => {
 
   const formatDateShort = (date: Date) => {
     const s = date.toLocaleDateString("es-ES", {
-      weekday: "long",
+      weekday: "short",
       day: "numeric",
-      month: "long",
+      month: "short",
     });
     return s.charAt(0).toUpperCase() + s.slice(1);
   };
@@ -506,7 +563,7 @@ const DashboardScreen: React.FC = () => {
     const { data, error } = await supabase
       .from("time_entries")
       .select(
-        "id,user_id,occurred_at,entry_type,description,created_at,date,entry_time,minutes",
+        "id,user_id,occurred_at,entry_type,description,created_at,date,entry_time,minutes,company_id,companies:company_id(name)",
       )
       .eq("user_id", authUser.id)
       .gte("occurred_at", start.toISOString())
@@ -641,10 +698,136 @@ const DashboardScreen: React.FC = () => {
     setYearTotalMins(wMins + bMins + oMins);
   };
 
+  const checkCompanyLink = async () => {
+    try {
+      setLoadingCompanyCheck(true);
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user) return;
+
+      const { data, error } = await supabase
+        .from('company_members')
+        .select('company_id, accepted, companies:company_id(name)')
+        .eq('user_id', userData.user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Error checking company link:", error);
+        return;
+      }
+
+      if (data) {
+        const companiesObj = Array.isArray(data.companies) 
+          ? data.companies[0] 
+          : data.companies;
+
+        if (data.accepted === false) {
+          // Hay una invitación pendiente
+          setHasCompany(false);
+          setPendingInvite({
+            companyId: data.company_id,
+            companyName: companiesObj?.name || 'Empresa sin nombre'
+          });
+          setActiveCompanyId(null);
+          setActiveCompanyName(null);
+        } else {
+          // Vinculado activamente
+          setHasCompany(true);
+          setPendingInvite(null);
+          setActiveCompanyId(data.company_id);
+          setActiveCompanyName(companiesObj?.name || 'Empresa sin nombre');
+        }
+      } else {
+        // No hay vinculación ni invitación
+        setHasCompany(false);
+        setPendingInvite(null);
+        setActiveCompanyId(null);
+        setActiveCompanyName(null);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingCompanyCheck(false);
+    }
+  };
+
+  const handleAcceptInvite = async () => {
+    if (!pendingInvite) return;
+    try {
+      setRespondingInvite(true);
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user) return;
+
+      // 1. Aceptar en company_members
+      const { error: memberError } = await supabase
+        .from('company_members')
+        .update({ accepted: true })
+        .eq('user_id', userData.user.id)
+        .eq('company_id', pendingInvite.companyId);
+
+      if (memberError) throw memberError;
+
+      // 2. Actualizar profiles
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          company_id: pendingInvite.companyId,
+          role: 'employee'
+        })
+        .eq('id', userData.user.id);
+
+      if (profileError) {
+        console.error("Error updating profile with accepted company:", profileError);
+      }
+
+      setMessage({ type: 'success', text: `¡Te has unido a ${pendingInvite.companyName}! 🎉` });
+      setPendingInvite(null);
+      setHasCompany(true);
+      await refreshAll();
+    } catch (e: any) {
+      console.error(e);
+      setMessage({ type: 'error', text: e.message || 'Error al aceptar la invitación.' });
+    } finally {
+      setRespondingInvite(false);
+    }
+  };
+
+  const handleRejectInvite = async () => {
+    if (!pendingInvite) return;
+    if (!window.confirm(`¿Estás seguro de que deseas rechazar la invitación de la empresa "${pendingInvite.companyName}"?`)) {
+      return;
+    }
+
+    try {
+      setRespondingInvite(true);
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user) return;
+
+      // Eliminar de company_members
+      const { error: memberError } = await supabase
+        .from('company_members')
+        .delete()
+        .eq('user_id', userData.user.id)
+        .eq('company_id', pendingInvite.companyId);
+
+      if (memberError) throw memberError;
+
+      setMessage({ type: 'success', text: `Invitación rechazada.` });
+      setPendingInvite(null);
+      setHasCompany(false);
+      await refreshAll();
+    } catch (e: any) {
+      console.error(e);
+      setMessage({ type: 'error', text: e.message || 'Error al rechazar la invitación.' });
+    } finally {
+      setRespondingInvite(false);
+    }
+  };
+
   const refreshAll = async () => {
     const today = isoDate(new Date());
     setEntryDate(today);
     setEntryTime(nowHHMM());
+    await checkCompanyLink();
     await loadTodayEntries(today);
     await loadLiveMode();
     await loadWeekYearTotals();
@@ -654,6 +837,31 @@ const DashboardScreen: React.FC = () => {
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('company_members_dashboard')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'company_members',
+          filter: `user_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          console.log("Realtime change detected in company_members:", payload);
+          await checkCompanyLink();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   // --- Helpers auth / validación robusta (a prueba de multi pestaña / multi dispositivo) ---
   const getAuthUser = async () => {
@@ -849,6 +1057,7 @@ const DashboardScreen: React.FC = () => {
       entry_type: args.type,
       description: args.description,
       minutes: 0,
+      company_id: activeCompanyId,
     })
     .select("id, entry_type, occurred_at, created_at")
     .single();
@@ -1063,6 +1272,7 @@ const DashboardScreen: React.FC = () => {
         <img
           src={user.user_metadata?.avatar_url || DEFAULT_AVATAR}
           alt="Perfil"
+          onError={(e: React.SyntheticEvent<HTMLImageElement>) => { e.currentTarget.src = DEFAULT_AVATAR; }}
           onClick={() => navigate("/profile")}
           className="rounded-full size-10 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all object-cover"
         />
@@ -1084,11 +1294,106 @@ const DashboardScreen: React.FC = () => {
       )}
 
       <main className="flex-1 px-4 flex flex-col gap-6">
+        {/* Banner de Invitación de Empresa Pendiente */}
+        {pendingInvite && !loadingCompanyCheck && (
+          <div 
+            className="w-full bg-gradient-to-r from-indigo-600 to-violet-600 text-white border border-indigo-500/30 rounded-2xl p-5 flex flex-col gap-4 shadow-xl shadow-indigo-600/10 animate-in fade-in slide-in-from-top-4 duration-300"
+          >
+            <div className="flex items-start gap-3">
+              <span className="material-symbols-outlined text-white shrink-0 text-[26px] bg-white/10 p-1.5 rounded-xl">business</span>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-base font-bold tracking-tight">
+                  Invitación de Empresa
+                </span>
+                <span className="text-xs text-indigo-100 leading-normal">
+                  La empresa <strong className="text-white font-extrabold">{pendingInvite.companyName}</strong> te ha invitado a unirte a su organización como empleado. Si aceptas, podrás sincronizar tus jornadas de fichaje con su gestor.
+                </span>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-3 mt-1">
+              <button
+                onClick={handleAcceptInvite}
+                disabled={respondingInvite}
+                className="flex-1 bg-white text-indigo-700 hover:bg-indigo-50 font-bold py-2.5 px-4 rounded-xl text-xs transition-all active:scale-[0.98] border-none cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-black/10 disabled:opacity-50"
+              >
+                {respondingInvite ? (
+                  <div className="w-3.5 h-3.5 border-2 border-indigo-700/30 border-t-indigo-700 rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                    Aceptar Invitación
+                  </>
+                )}
+              </button>
+              
+              <button
+                onClick={handleRejectInvite}
+                disabled={respondingInvite}
+                className="py-2.5 px-4 rounded-xl text-xs font-bold bg-transparent text-indigo-200 hover:text-white hover:bg-white/10 transition-all border-none cursor-pointer disabled:opacity-50"
+              >
+                Rechazar
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Timer Section */}
         <div className="flex flex-col gap-2">
-          <span className="text-[12.px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter">
-            {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
-          </span>
+          {/* Fila: fecha + botones rápidos de Compañeros y Tareas */}
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter whitespace-nowrap">
+              {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
+            </span>
+            {/* Botones pequeños (solo si hay empresa activa) */}
+            {activeCompanyId && (
+              <div className="flex items-center gap-2">
+                {/* Compañeros (Chat) */}
+                <button
+                  onClick={() => setShowChatPanel(p => !p)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 relative"
+                  style={{
+                    background: showChatPanel
+                      ? 'linear-gradient(135deg,#6366f1,#8b5cf6)'
+                      : 'rgba(99,102,241,0.12)',
+                    color: showChatPanel ? '#fff' : '#818cf8',
+                    border: '1px solid rgba(99,102,241,0.2)',
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 15 }}>forum</span>
+                  Compañeros{workingCount > 0 && ` (${workingCount})`}
+                  {unreadChatCount > 0 && (
+                    <span style={{
+                      position: 'absolute', top: -5, right: -5,
+                      background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                      color: '#fff', borderRadius: '50%',
+                      minWidth: 15, height: 15, fontSize: 9, fontWeight: 700,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      border: '2px solid #0f172a',
+                    }}>
+                      {unreadChatCount > 9 ? '9+' : unreadChatCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Tareas */}
+                <button
+                  onClick={() => setShowTasksPanel(p => !p)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 relative"
+                  style={{
+                    background: showTasksPanel
+                      ? 'linear-gradient(135deg,#f59e0b,#d97706)'
+                      : 'rgba(245,158,11,0.12)',
+                    color: showTasksPanel ? '#fff' : '#fbbf24',
+                    border: '1px solid rgba(245,158,11,0.2)',
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 15 }}>checklist</span>
+                  Tareas{pendingTasksCount > 0 && ` (${pendingTasksCount > 9 ? '9+' : pendingTasksCount})`}
+                </button>
+              </div>
+            )}
+          </div>
           <section className="flex flex-col items-center justify-center py-10 bg-white dark:bg-surface-dark rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800/50">
           <p className="text-slate-400 text-xs font-medium">
             Tiempo en este estado
@@ -1103,7 +1408,18 @@ const DashboardScreen: React.FC = () => {
           >
             {getStatusLabel()}
           </p>
-          
+
+          {hasCompany && activeCompanyName ? (
+            <p className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-1 font-semibold">
+              <span className="material-symbols-outlined text-[15px] text-slate-400 dark:text-slate-500">business</span>
+              Fichando en: <strong className="text-slate-600 dark:text-slate-300 font-extrabold">{activeCompanyName}</strong>
+            </p>
+          ) : (
+            <p className="text-xs text-slate-400 dark:text-slate-500 flex items-center gap-1 mt-1 font-semibold">
+              <span className="material-symbols-outlined text-[15px] text-slate-400 dark:text-slate-500">business</span>
+              Sin vinculación a ninguna empresa
+            </p>
+          )}
         </section>
         </div>
 
@@ -1422,9 +1738,16 @@ const DashboardScreen: React.FC = () => {
                     </div>
 
                     <div className="flex-1">
-                      <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">
-                        {displayLabel}
-                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="font-bold text-slate-800 dark:text-slate-100 text-sm">
+                          {displayLabel}
+                        </p>
+                        {e.companies?.name && (
+                          <span className="text-[9px] font-bold bg-indigo-500/10 text-indigo-500 dark:text-indigo-400 dark:bg-indigo-500/20 px-1.5 py-0.5 rounded-md leading-none">
+                            {e.companies.name}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-[10px] text-slate-500 dark:text-slate-400 font-semibold">
                         {timeCell} • {meta.label}
                       </p>
@@ -1486,6 +1809,81 @@ const DashboardScreen: React.FC = () => {
         </section>
       </main>
 
+      {/* Chat Panel Drawer */}
+      {showChatPanel && activeCompanyId && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
+          }}
+        >
+          {/* Backdrop */}
+          <div
+            onClick={() => setShowChatPanel(false)}
+            style={{
+              position: 'absolute', inset: 0,
+              background: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(4px)',
+            }}
+          />
+          {/* Panel */}
+          <div
+            style={{
+              position: 'relative',
+              width: '100%', maxWidth: 448, margin: '0 auto',
+              height: '80vh',
+              background: 'linear-gradient(180deg, #0f172a 0%, #111827 100%)',
+              borderRadius: '20px 20px 0 0',
+              display: 'flex', flexDirection: 'column',
+              overflow: 'hidden',
+              boxShadow: '0 -8px 40px rgba(99,102,241,0.15)',
+              border: '1px solid rgba(99,102,241,0.15)',
+              borderBottom: 'none',
+              animation: 'slideUpChat 0.3s cubic-bezier(0.32,0.72,0,1)',
+            }}
+          >
+            {/* Drag handle */}
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+              <div style={{ width: 36, height: 4, borderRadius: 2, background: 'rgba(148,163,184,0.2)' }} />
+            </div>
+            <ChatPanel
+              companyId={activeCompanyId}
+              onUnreadChange={setUnreadChatCount}
+            />
+          </div>
+        </div>
+      )}
+      {/* Tasks Panel Drawer */}
+      {showTasksPanel && activeCompanyId && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+          <div
+            onClick={() => setShowTasksPanel(false)}
+            style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+          />
+          <div style={{
+            position: 'relative', width: '100%', maxWidth: 448, margin: '0 auto', height: '80vh',
+            background: 'linear-gradient(180deg, #0f172a 0%, #111827 100%)',
+            borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', boxShadow: '0 -8px 40px rgba(245,158,11,0.12)',
+            border: '1px solid rgba(245,158,11,0.15)', borderBottom: 'none',
+            animation: 'slideUpChat 0.3s cubic-bezier(0.32,0.72,0,1)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+              <div style={{ width: 36, height: 4, borderRadius: 2, background: 'rgba(148,163,184,0.2)' }} />
+            </div>
+            <TasksPanel onPendingChange={setPendingTasksCount} />
+          </div>
+        </div>
+      )}
+
+      {/* CSS para animación de drawers */}
+      <style>{`
+        @keyframes slideUpChat {
+          from { transform: translateY(100%); opacity: 0; }
+          to   { transform: translateY(0);    opacity: 1; }
+        }
+      `}</style>
+
       {/* Bottom Navigation */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-[#151b26] border-t border-slate-200 dark:border-slate-800 pb-safe shadow-[0_-4px_10px_rgba(0,0,0,0.05)] z-30">
         <div className="relative flex justify-around items-center h-16 max-w-md mx-auto">
@@ -1517,8 +1915,6 @@ const DashboardScreen: React.FC = () => {
               <span className="material-symbols-outlined text-4xl">add</span>
             </button>
           </div>
-
-          <div className="w-full"></div>
 
           <button
             onClick={() => navigate("/history")}
