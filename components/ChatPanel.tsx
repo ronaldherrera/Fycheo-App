@@ -105,7 +105,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ companyId, onUnreadChange }) => {
       // 1. Obtener miembros de la empresa (excepto yo)
       const { data: members, error: membersError } = await supabase
         .from('company_members')
-        .select('user_id, profiles:user_id(full_name)')
+        .select('user_id, profiles:user_id(full_name, avatar_url)')
         .eq('company_id', companyId)
         .eq('accepted', true)
         .neq('user_id', user.id);
@@ -634,31 +634,25 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ companyId, onUnreadChange }) => {
                         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, flexShrink: 0,
                       }}>
                         <div style={{ position: 'relative' }}>
-                          {/* Anillo de estado */}
-                          <div style={{
-                            width: 58, height: 58, borderRadius: '50%', padding: 2.5,
-                            background: `conic-gradient(${pm.color} 0%, ${pm.color}55 70%, transparent 100%)`,
-                          }}>
+                          {c.avatar_url ? (
+                            <img src={c.avatar_url} alt="" style={{ width: 52, height: 52, borderRadius: '50%', objectFit: 'cover', display: 'block' }} />
+                          ) : (
                             <div style={{
-                              width: '100%', height: '100%', borderRadius: '50%',
-                              background: '#060e1c', padding: 2,
+                              width: 52, height: 52, borderRadius: '50%',
+                              background: 'linear-gradient(135deg, #6366f1, #4338ca)',
                               display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>
-                              {c.avatar_url ? (
-                                <img src={c.avatar_url} alt="" style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover' }} />
-                              ) : (
-                                <div style={{
-                                  width: 44, height: 44, borderRadius: '50%',
-                                  background: 'linear-gradient(135deg, #6366f1, #4338ca)',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                  fontSize: 17, fontWeight: 800, color: '#fff',
-                                }}>{initial}</div>
-                              )}
-                            </div>
-                          </div>
+                              fontSize: 19, fontWeight: 800, color: '#fff',
+                            }}>{initial}</div>
+                          )}
+                          {/* Punto de estado ("punti") en la esquina inferior derecha */}
+                          <span style={{
+                            position: 'absolute', bottom: 1, right: 1,
+                            width: 11, height: 11, borderRadius: '50%',
+                            background: pm.color, border: '2px solid #060e1c',
+                          }} />
                           {c.unreadCount > 0 && (
                             <div style={{
-                              position: 'absolute', top: 1, right: 1,
+                              position: 'absolute', top: -2, right: -2,
                               background: '#ef4444', color: '#fff',
                               minWidth: 17, height: 17, borderRadius: 9,
                               display: 'flex', alignItems: 'center', justifyContent: 'center',

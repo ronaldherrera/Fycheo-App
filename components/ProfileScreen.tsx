@@ -929,6 +929,16 @@ const ProfileScreen: React.FC = () => {
         throw updateError;
       }
 
+      // Sincronizar con la tabla pública profiles
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
+
+      if (profileError) {
+        console.error("Error updating avatar in profiles table:", profileError);
+      }
+
       if (userData.user) {
         setUser(userData.user);
         setMessage({ type: 'success', text: 'Foto de perfil actualizada' });
