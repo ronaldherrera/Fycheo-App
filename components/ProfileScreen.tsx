@@ -298,7 +298,7 @@ const ProfileScreen: React.FC = () => {
 
       if (format === 'csv') {
           // Generate CSV
-          let csvContent = "Fecha,Hora,Descripcion\n";
+          let csvContent = "Fecha,Hora,Descripcion,Metodo,Ubicacion\n";
           
           data.forEach((row) => {
               const d = row.occurred_at ? new Date(row.occurred_at) : new Date(row.created_at);
@@ -317,7 +317,12 @@ const ProfileScreen: React.FC = () => {
               let finalDesc = row.description || typeLabel;
               finalDesc = finalDesc.replace(/,/g, ' '); 
 
-              csvContent += `${dateStr},${timeStr},${finalDesc}\n`;
+              const metodoStr = row.is_manual ? 'Manual' : 'Dispositivo';
+              const ubicacionStr = (row.latitude != null && row.longitude != null)
+                  ? `"${row.latitude}, ${row.longitude}"`
+                  : 'No disponible';
+
+              csvContent += `${dateStr},${timeStr},${finalDesc},${metodoStr},${ubicacionStr}\n`;
           });
 
           const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -551,55 +556,62 @@ const ProfileScreen: React.FC = () => {
                    }
               }
 
-              tableRows.push([dateStr, timeStr, finalDesc, durationLabel]);
+              const metodoStr = row.is_manual ? 'Manual' : 'Dispositivo';
+              const ubicacionStr = (row.latitude != null && row.longitude != null)
+                  ? `${Number(row.latitude).toFixed(4)}, ${Number(row.longitude).toFixed(4)}`
+                  : '-';
+
+              tableRows.push([dateStr, timeStr, finalDesc, metodoStr, ubicacionStr, durationLabel]);
           });
 
           autoTable(doc, {
-            head: [['Fecha', 'Hora', 'Descripción', 'Tiempo']],
+            head: [['Fecha', 'Hora', 'Descripción', 'Método', 'Ubicación', 'Tiempo']],
             body: tableRows,
             startY: 78,
             theme: 'grid',
             headStyles: { fillColor: [19, 91, 236], textColor: 255 },
-            styles: { fontSize: 9, cellPadding: 3, valign: 'middle' },
+            styles: { fontSize: 8, cellPadding: 3, valign: 'middle' },
             alternateRowStyles: { fillColor: [248, 250, 252] },
             columnStyles: {
-                0: { cellWidth: 30 },
-                1: { cellWidth: 20 },
-                3: { cellWidth: 30, halign: 'center' }
+                0: { cellWidth: 22 },
+                1: { cellWidth: 15 },
+                3: { cellWidth: 20, halign: 'center' },
+                4: { cellWidth: 35, halign: 'center' },
+                5: { cellWidth: 22, halign: 'center' }
             },
             willDrawCell: (data) => {
-                if (data.section === 'body' && data.column.index === 3) {
+                if (data.section === 'body' && data.column.index === 5) {
                      const text = data.cell.raw as string;
                      if (text && text !== '-') {
-                         const desc = (data.row.raw as string[])[2].toLowerCase();
-                         
-                         let tagColor: number[] | null = null;
-                         
-                         if (desc.includes('entrada') || desc.includes('fin descanso') || desc.includes('others-in')) {
-                              tagColor = [59, 130, 246]; // Blue (Working)
-                         } else if (desc.includes('inicio descanso')) {
-                              tagColor = [245, 158, 11]; // Orange (Break)
-                         } else if (desc.includes('permiso') || desc.includes('others-out')) {
-                              tagColor = [236, 72, 153]; // Pink (Others)
-                         } else {
-                              // Default (e.g. Salida trabajo): No tag, plain text
-                              return; 
-                         }
+                          const desc = (data.row.raw as string[])[2].toLowerCase();
+                          
+                          let tagColor: number[] | null = null;
+                          
+                          if (desc.includes('entrada') || desc.includes('fin descanso') || desc.includes('others-in')) {
+                               tagColor = [59, 130, 246]; // Blue (Working)
+                          } else if (desc.includes('inicio descanso')) {
+                               tagColor = [245, 158, 11]; // Orange (Break)
+                          } else if (desc.includes('permiso') || desc.includes('others-out')) {
+                               tagColor = [236, 72, 153]; // Pink (Others)
+                          } else {
+                               // Default (e.g. Salida trabajo): No tag, plain text
+                               return; 
+                          }
 
-                         if (tagColor) {
-                             doc.setFillColor(tagColor[0], tagColor[1], tagColor[2]);
-                             const boxWidth = 24;
-                             const boxHeight = 6;
-                             const x = data.cell.x + (data.cell.width - boxWidth) / 2;
-                             const y = data.cell.y + (data.cell.height - boxHeight) / 2;
-                             
-                             doc.roundedRect(x, y, boxWidth, boxHeight, 1, 1, 'F');
-                             
-                             // Set text to white for tagged cells
-                             doc.setTextColor(255, 255, 255);
-                             doc.setFont("helvetica", "bold");
-                         }
-                     }
+                          if (tagColor) {
+                              doc.setFillColor(tagColor[0], tagColor[1], tagColor[2]);
+                              const boxWidth = 20;
+                              const boxHeight = 5.5;
+                              const x = data.cell.x + (data.cell.width - boxWidth) / 2;
+                              const y = data.cell.y + (data.cell.height - boxHeight) / 2;
+                              
+                              doc.roundedRect(x, y, boxWidth, boxHeight, 1, 1, 'F');
+                              
+                              // Set text to white for tagged cells
+                              doc.setTextColor(255, 255, 255);
+                              doc.setFont("helvetica", "bold");
+                          }
+                      }
                 }
             },
             didDrawCell: (data) => {

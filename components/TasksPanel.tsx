@@ -130,22 +130,34 @@ const TasksPanel: React.FC<TasksPanelProps> = ({ onPendingChange }) => {
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*',
           schema: 'public',
           table: 'tasks',
           filter: `assigned_to=eq.${user.id}`,
         },
         (payload) => {
-          const newTask = payload.new as Task;
-          if (newTask.status === 'pending') {
-            setTasks(prev => [newTask, ...prev]);
+          if (payload.eventType === 'INSERT') {
+            const newTask = payload.new as Task;
+            if (newTask.status === 'pending') {
+              setTasks(prev => [newTask, ...prev]);
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const updatedTask = payload.new as Task;
+            if (updatedTask.status === 'done') {
+              setTasks(prev => prev.filter(t => t.id !== updatedTask.id));
+            } else {
+              setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const deletedTask = payload.old as Task;
+            setTasks(prev => prev.filter(t => t.id !== deletedTask.id));
           }
         }
       )
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id, onPendingChange]);
+  }, [user?.id]);
 
   // ── Carga inicial ─────────────────────────────────────────────────────────
   useEffect(() => {

@@ -8,7 +8,7 @@
  * - Botones "Otros" del modal con type="button" + disabled + estilo opaco.
  */
 
-import React, { useEffect, useMemo, useState, useContext } from "react";
+import React, { useEffect, useMemo, useState, useContext, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppContext } from "../App";
 import { supabase } from "../services/supabase";
@@ -213,8 +213,76 @@ const DashboardScreen: React.FC = () => {
   // Conteo de compañeros trabajando ahora
   const [workingCount, setWorkingCount] = useState(0);
 
-  // Cargar conteo de tareas pendientes al montar (para el badge)
+  // Soporte Offline
+  const saveOfflineEntry = (payload: any) => {
+    try {
+      const existing = localStorage.getItem("fycheo_offline_entries");
+      const list = existing ? JSON.parse(existing) : [];
+      list.push(payload);
+      localStorage.setItem("fycheo_offline_entries", JSON.stringify(list));
+    } catch (e) {
+      console.error("Error al guardar fichaje offline:", e);
+    }
+  };
+
+  const syncOfflineEntries = async () => {
+    const existing = localStorage.getItem("fycheo_offline_entries");
+    if (!existing) return;
+    try {
+      const list = JSON.parse(existing);
+      if (!Array.isArray(list) || list.length === 0) return;
+
+      setMessage({
+        type: "success",
+        text: "Sincronizando fichajes offline guardados... 🔄",
+      });
+
+      for (const entry of list) {
+        const { error } = await supabase.from("time_entries").insert(entry);
+        if (error) {
+          console.error("Error al sincronizar entrada offline:", error);
+          if (error.message?.includes("fetch") || error.message?.includes("network")) {
+            setMessage({
+              type: "error",
+              text: "Error de red al sincronizar. Se reintentará al recuperar conexión.",
+            });
+            return;
+          }
+        }
+      }
+
+      localStorage.removeItem("fycheo_offline_entries");
+      setMessage({
+        type: "success",
+        text: "Fichajes sincronizados con éxito. ✅",
+      });
+      
+      const today = isoDate(new Date());
+      await loadTodayEntries(today);
+      await loadLiveMode();
+      await loadWeekYearTotals();
+    } catch (e) {
+      console.error("Error en sincronización offline:", e);
+    }
+  };
+
   useEffect(() => {
+    if (navigator.onLine) {
+      syncOfflineEntries();
+    }
+    
+    const handleOnline = () => {
+      syncOfflineEntries();
+    };
+    
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
+  // Cargar conteo de tareas pendientes (para el badge)
+  const loadPendingTasksCount = useCallback(() => {
     if (!user?.id) return;
     supabase
       .from('tasks')
@@ -224,8 +292,34 @@ const DashboardScreen: React.FC = () => {
       .then(({ count }) => setPendingTasksCount(count ?? 0));
   }, [user?.id]);
 
-  // Cargar compañeros trabajando ahora
   useEffect(() => {
+    if (!user?.id) return;
+
+    loadPendingTasksCount();
+
+    const channel = supabase
+      .channel('realtime_tasks_count')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `assigned_to=eq.${user.id}`,
+        },
+        () => {
+          loadPendingTasksCount();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, loadPendingTasksCount]);
+
+  // Cargar compañeros trabajando ahora
+  const loadWorkingCount = useCallback(() => {
     if (!user?.id || !activeCompanyId) return;
 
     const today = new Date().toISOString().slice(0, 10);
@@ -244,10 +338,36 @@ const DashboardScreen: React.FC = () => {
         for (const e of data) {
           if (!lastByUser.has(e.user_id)) lastByUser.set(e.user_id, e.entry_type);
         }
-        const working = [...lastByUser.values()].filter(t => t === 'clock-in' || t === 'others-in').length;
+        const working = [...lastByUser.values()].filter(t => t === 'clock-in' || t === 'others-in' || t === 'break-end').length;
         setWorkingCount(working);
       });
   }, [user?.id, activeCompanyId]);
+
+  useEffect(() => {
+    if (!user?.id || !activeCompanyId) return;
+
+    loadWorkingCount();
+
+    const channel = supabase
+      .channel('realtime_working_count')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'time_entries',
+          filter: `company_id=eq.${activeCompanyId}`,
+        },
+        () => {
+          loadWorkingCount();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, activeCompanyId, loadWorkingCount]);
 
 
   // --- Estado lógico según últimos fichajes (para validar acciones) ---
@@ -1011,45 +1131,68 @@ const DashboardScreen: React.FC = () => {
     return { ok: true as const };
   };
 
-  const insertTimeEntryValidated = async (args: {
-  type: RelevantType | EntryType;
-  occurredAt: Date;
-  description: string;
-  dateISO: string;
-  timeHHMM: string;
-}) => {
-  setMessage(null);
-
-  const { user: authUser, error: userErr } = await getAuthUser();
-  if (userErr || !authUser) {
-    setMessage({
-      type: "error",
-      text: "No hay sesión activa. Vuelve a iniciar sesión.",
+  const getCurrentLocation = (): Promise<{ latitude: number; longitude: number } | null> => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve(null);
+        return;
+      }
+      
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          resolve({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          });
+        },
+        (error) => {
+          console.warn("Error obteniendo localización:", error);
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 3000, maximumAge: 0 }
+      );
     });
-    return { ok: false };
-  }
+  };
 
-  // Solo validamos reglas para tipos relevantes (los otros no afectan al flujo)
-  const lower = (args.type ?? "").toLowerCase();
-  if (relevantTypes.includes(lower as any)) {
-    const v = await validateAction(
-      authUser.id,
-      lower as RelevantType,
-      args.occurredAt,
-    );
-    if (!v.ok) {
+  const insertTimeEntryValidated = async (args: {
+    type: RelevantType | EntryType;
+    occurredAt: Date;
+    description: string;
+    dateISO: string;
+    timeHHMM: string;
+    isManual?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+  }) => {
+    setMessage(null);
+
+    const { user: authUser, error: userErr } = await getAuthUser();
+    if (userErr || !authUser) {
       setMessage({
         type: "error",
-        text: (v as any).reason ?? "Acción no permitida",
+        text: "No hay sesión activa. Vuelve a iniciar sesión.",
       });
       return { ok: false };
     }
-  }
 
-  // 👇 IMPORTANTE: pedimos que Supabase nos devuelva el registro insertado
-  const { data: inserted, error } = await supabase
-    .from("time_entries")
-    .insert({
+    // Solo validamos reglas para tipos relevantes (los otros no afectan al flujo)
+    const lower = (args.type ?? "").toLowerCase();
+    if (relevantTypes.includes(lower as any)) {
+      const v = await validateAction(
+        authUser.id,
+        lower as RelevantType,
+        args.occurredAt,
+      );
+      if (!v.ok) {
+        setMessage({
+          type: "error",
+          text: (v as any).reason ?? "Acción no permitida",
+        });
+        return { ok: false };
+      }
+    }
+
+    const payload = {
       user_id: authUser.id,
       occurred_at: args.occurredAt.toISOString(),
       date: args.dateISO,
@@ -1058,26 +1201,27 @@ const DashboardScreen: React.FC = () => {
       description: args.description,
       minutes: 0,
       company_id: activeCompanyId,
-    })
-    .select("id, entry_type, occurred_at, created_at")
-    .single();
+      is_manual: args.isManual ?? false,
+      latitude: args.latitude ?? null,
+      longitude: args.longitude ?? null,
+    };
 
-  if (error) {
-    setMessage({ type: "error", text: error.message });
-    return { ok: false };
-  }
+    if (!navigator.onLine) {
+      saveOfflineEntry(payload);
+      
+      // Actualizar UI localmente
+      const tempEntry: TimeEntry = {
+        id: Math.random().toString(36).substring(2, 9),
+        user_id: authUser.id,
+        occurred_at: args.occurredAt.toISOString(),
+        entry_type: args.type,
+        description: args.description,
+        created_at: new Date().toISOString(),
+        company_id: activeCompanyId,
+      } as any;
+      setTodayEntries(prev => [tempEntry, ...prev]);
 
-  // ✅ Actualización inmediata del estado/contador (sin recargar)
-  const insertedType = ((inserted?.entry_type ?? "") as string).toLowerCase();
-  const insertedAt = inserted?.occurred_at
-    ? new Date(inserted.occurred_at)
-    : inserted?.created_at
-      ? new Date(inserted.created_at)
-      : args.occurredAt;
-
-  // Solo si es un tipo relevante y es más reciente que el último estado conocido
-  if (relevantTypes.includes(insertedType as any)) {
-    if (insertedAt.getTime() >= liveModeSince.getTime()) {
+      const insertedType = args.type.toLowerCase();
       let mode: "working" | "break" | "out" | "others" = "out";
       if (insertedType === "clock-in") mode = "working";
       else if (insertedType === "break-start") mode = "break";
@@ -1086,23 +1230,130 @@ const DashboardScreen: React.FC = () => {
       else if (insertedType === "clock-out") mode = "out";
 
       setLiveMode(mode);
-      setLiveModeSince(insertedAt);
+      setLiveModeSince(args.occurredAt);
+
+      setMessage({
+        type: "success",
+        text: "Sin conexión. Fichaje guardado localmente, se sincronizará cuando vuelvas a tener internet. 📲",
+      });
+
+      return { ok: true, offline: true };
     }
-  }
 
-  setMessage({ type: "success", text: "Registro guardado ✅" });
+    try {
+      const { data: inserted, error } = await supabase
+        .from("time_entries")
+        .insert(payload)
+        .select("id, entry_type, occurred_at, created_at")
+        .single();
 
-  // 1) Actividad: siempre HOY
-  const today = isoDate(new Date());
-  await loadTodayEntries(today);
+      if (error) {
+        if (error.message?.includes("fetch") || error.message?.includes("network") || (error as any).status === 0) {
+          saveOfflineEntry(payload);
+          
+          // Actualizar UI localmente
+          const tempEntry: TimeEntry = {
+            id: Math.random().toString(36).substring(2, 9),
+            user_id: authUser.id,
+            occurred_at: args.occurredAt.toISOString(),
+            entry_type: args.type,
+            description: args.description,
+            created_at: new Date().toISOString(),
+            company_id: activeCompanyId,
+          } as any;
+          setTodayEntries(prev => [tempEntry, ...prev]);
 
-  // 2) Estado real: recálculo (por si había algo más reciente)
-  await loadLiveMode();
+          const insertedType = args.type.toLowerCase();
+          let mode: "working" | "break" | "out" | "others" = "out";
+          if (insertedType === "clock-in") mode = "working";
+          else if (insertedType === "break-start") mode = "break";
+          else if (insertedType === "break-end") mode = "working";
+          else if (insertedType === "others-out") mode = "others";
+          else if (insertedType === "clock-out") mode = "out";
 
-  await loadWeekYearTotals();
-  return { ok: true };
-};
+          setLiveMode(mode);
+          setLiveModeSince(args.occurredAt);
 
+          setMessage({
+            type: "success",
+            text: "Sin conexión. Fichaje guardado localmente, se sincronizará cuando vuelvas a tener internet. 📲",
+          });
+
+          return { ok: true, offline: true };
+        }
+
+        setMessage({ type: "error", text: error.message });
+        return { ok: false };
+      }
+
+      // ✅ Actualización inmediata del estado/contador (sin recargar)
+      const insertedType = ((inserted?.entry_type ?? "") as string).toLowerCase();
+      const insertedAt = inserted?.occurred_at
+        ? new Date(inserted.occurred_at)
+        : inserted?.created_at
+          ? new Date(inserted.created_at)
+          : args.occurredAt;
+
+      // Solo si es un tipo relevante y es más reciente que el último estado conocido
+      if (relevantTypes.includes(insertedType as any)) {
+        if (insertedAt.getTime() >= liveModeSince.getTime()) {
+          let mode: "working" | "break" | "out" | "others" = "out";
+          if (insertedType === "clock-in") mode = "working";
+          else if (insertedType === "break-start") mode = "break";
+          else if (insertedType === "break-end") mode = "working";
+          else if (insertedType === "others-out") mode = "others";
+          else if (insertedType === "clock-out") mode = "out";
+
+          setLiveMode(mode);
+          setLiveModeSince(insertedAt);
+        }
+      }
+
+      setMessage({ type: "success", text: "Registro guardado ✅" });
+
+      // 1) Actividad: siempre HOY
+      const today = isoDate(new Date());
+      await loadTodayEntries(today);
+
+      // 2) Estado real: recálculo (por si había algo más reciente)
+      await loadLiveMode();
+
+      await loadWeekYearTotals();
+      return { ok: true };
+    } catch (e) {
+      console.error(e);
+      saveOfflineEntry(payload);
+      
+      // Actualizar UI localmente
+      const tempEntry: TimeEntry = {
+        id: Math.random().toString(36).substring(2, 9),
+        user_id: authUser.id,
+        occurred_at: args.occurredAt.toISOString(),
+        entry_type: args.type,
+        description: args.description,
+        created_at: new Date().toISOString(),
+        company_id: activeCompanyId,
+      } as any;
+      setTodayEntries(prev => [tempEntry, ...prev]);
+
+      const insertedType = args.type.toLowerCase();
+      let mode: "working" | "break" | "out" | "others" = "out";
+      if (insertedType === "clock-in") mode = "working";
+      else if (insertedType === "break-start") mode = "break";
+      else if (insertedType === "break-end") mode = "working";
+      else if (insertedType === "others-out") mode = "others";
+      else if (insertedType === "clock-out") mode = "out";
+
+      setLiveMode(mode);
+      setLiveModeSince(args.occurredAt);
+
+      setMessage({
+        type: "success",
+        text: "Sin conexión. Fichaje guardado localmente, se sincronizará cuando vuelvas a tener internet. 📲",
+      });
+      return { ok: true, offline: true };
+    }
+  };
 
   const quickRegister = async (
     type: "clock-in" | "clock-out" | "break-start" | "break-end",
@@ -1157,17 +1408,20 @@ const DashboardScreen: React.FC = () => {
     }
 
     const now = new Date();
+    const coords = await getCurrentLocation();
     const res = await insertTimeEntryValidated({
       type,
       occurredAt: now,
       description: typeMeta(type).label,
       dateISO: isoDate(now),
       timeHHMM: nowHHMM(),
+      isManual: false,
+      latitude: coords?.latitude ?? null,
+      longitude: coords?.longitude ?? null,
     });
 
     return !!res.ok;
   };
-
   const handleSaveManualEntry = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -1342,9 +1596,10 @@ const DashboardScreen: React.FC = () => {
         <div className="flex flex-col gap-2">
           {/* Fila: fecha + botones rápidos de Compañeros y Tareas */}
           <div className="flex items-center justify-between">
-            <span className="text-[12px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter whitespace-nowrap">
-              {formatDateShort(currentTime)} • {formatTimeShort(currentTime)}
-            </span>
+            <div className="flex flex-col text-[12px] font-bold text-slate-400 dark:text-slate-500 tracking-tighter leading-tight">
+              <span>{formatDateShort(currentTime)}</span>
+              <span className="text-[11px] opacity-90">{formatTimeShort(currentTime)}</span>
+            </div>
             {/* Botones pequeños (solo si hay empresa activa) */}
             {activeCompanyId && (
               <div className="flex items-center gap-2">
@@ -2198,12 +2453,16 @@ const DashboardScreen: React.FC = () => {
                   if (!reasonText.trim()) return;
                   
                   const now = new Date();
+                  const coords = await getCurrentLocation();
                   const res = await insertTimeEntryValidated({
                     type: "others-out",
                     occurredAt: now,
                     description: "Permiso: " + reasonText,
                     dateISO: isoDate(now),
                     timeHHMM: nowHHMM(),
+                    isManual: false,
+                    latitude: coords?.latitude ?? null,
+                    longitude: coords?.longitude ?? null,
                   });
 
                   if (res.ok) {

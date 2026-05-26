@@ -325,6 +325,31 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ companyId, onUnreadChange }) => {
     return () => clearInterval(interval);
   }, [loadCoworkers]);
 
+  // ── Suscripción Realtime: presencia de compañeros ──────────────────────────
+  useEffect(() => {
+    if (!user?.id || !companyId) return;
+
+    const channel = supabase
+      .channel('realtime_coworkers_presence')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'time_entries',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          loadCoworkers();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, companyId, loadCoworkers]);
+
   // ── Al seleccionar compañero ───────────────────────────────────────────────
   const handleSelectCoworker = async (coworker: Coworker) => {
     setActiveChat(coworker);
