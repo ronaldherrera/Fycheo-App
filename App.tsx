@@ -6,6 +6,9 @@ import LoginScreen from './components/LoginScreen';
 import DashboardScreen from './components/DashboardScreen';
 import ProfileScreen from './components/ProfileScreen';
 import HistoryScreen from './components/HistoryScreen';
+import DocumentsScreen from './components/DocumentsScreen';
+import SolicitudesScreen from './components/SolicitudesScreen';
+import { NotificationsProvider } from './contexts/NotificationsContext';
 import UpdatePasswordScreen from './components/UpdatePasswordScreen';
 import { supabase } from "./services/supabase";
 
@@ -70,6 +73,7 @@ const App: React.FC = () => {
 
   return (
     <AppContext.Provider value={{ user, setUser, isLoggedIn, setIsLoggedIn }}>
+      <NotificationsProvider>
       <HashRouter>
         <Routes>
           <Route path="/signin" element={<SigninScreen />} />
@@ -77,10 +81,13 @@ const App: React.FC = () => {
           <Route path="/dashboard" element={isLoggedIn ? <DashboardScreen /> : <Navigate to="/" />} />
           <Route path="/profile" element={isLoggedIn ? <ProfileScreen /> : <Navigate to="/" />} />
           <Route path="/history" element={isLoggedIn ? <HistoryScreen /> : <Navigate to="/" />} />
+          <Route path="/documents" element={isLoggedIn ? <DocumentsScreen /> : <Navigate to="/" />} />
+          <Route path="/solicitudes" element={isLoggedIn ? <SolicitudesScreen /> : <Navigate to="/" />} />
           <Route path="/update-password" element={<UpdatePasswordScreen />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </HashRouter>
+      </NotificationsProvider>
     </AppContext.Provider>
   );
 };

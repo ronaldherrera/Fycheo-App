@@ -1,6 +1,7 @@
 
 import React, { useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useNotifications } from '../contexts/NotificationsContext';
 import { AppContext } from '../App';
 import { supabase } from '../services/supabase';
 import { DEFAULT_AVATAR } from '../constants';
@@ -33,6 +34,7 @@ const CHART_COLORS = {
 const ProfileScreen: React.FC = () => {
   const navigate = useNavigate();
   const { user, setUser, setIsLoggedIn } = useContext(AppContext);
+  const { unseenDocs, unseenSolicitudes } = useNotifications();
   const [showModal, setShowModal] = useState(false);
   const [entryType, setEntryType] = useState<'clock-in' | 'clock-out' | 'break-start' | 'break-end' | 'others-in' | 'others-out'>('clock-in');
   const [context, setContext] = useState('');
@@ -1606,6 +1608,62 @@ const ProfileScreen: React.FC = () => {
         </div>
 
         <div className="mt-6">
+          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Documentos</h3>
+          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
+            <button
+              onClick={() => navigate('/documents')}
+              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                  <span className="material-symbols-outlined text-[20px]">folder</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-slate-900 dark:text-white font-medium text-base">Mis Documentos</span>
+                  <span className="text-xs text-text-secondary">Nóminas, contratos y más</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {unseenDocs > 0 && (
+                  <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-primary text-white text-[10px] font-bold">
+                    {unseenDocs}
+                  </span>
+                )}
+              </div>
+              <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Solicitudes</h3>
+          <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50">
+            <button
+              onClick={() => navigate('/solicitudes')}
+              className="w-full flex items-center justify-between px-4 py-4 hover:bg-gray-50 dark:hover:bg-white/5 transition-colors text-left group border-none bg-transparent cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="size-8 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-500">
+                  <span className="material-symbols-outlined text-[20px]">event_note</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-slate-900 dark:text-white font-medium text-base">Mis Solicitudes</span>
+                  <span className="text-xs text-text-secondary">Permisos, vacaciones y bajas</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {unseenSolicitudes > 0 && (
+                  <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-primary text-white text-[10px] font-bold">
+                    {unseenSolicitudes}
+                  </span>
+                )}
+                <span className="material-symbols-outlined text-text-secondary group-hover:text-primary transition-colors text-[20px]">chevron_right</span>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6">
           <h3 className="text-slate-500 dark:text-text-secondary text-xs font-bold uppercase tracking-wider px-4 pb-2">Seguridad</h3>
           <div className="bg-white dark:bg-surface-dark mx-4 rounded-xl overflow-hidden shadow-sm border border-gray-100 dark:border-border-dark/50 divide-y divide-gray-100 dark:divide-border-dark/50">
             <button 
@@ -1627,7 +1685,7 @@ const ProfileScreen: React.FC = () => {
         </div>
 
         <div className="mt-8 mb-8 mx-4">
-          <button 
+          <button
             onClick={async () => {
               await supabase.auth.signOut();
               setIsLoggedIn(false);

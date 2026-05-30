@@ -29,7 +29,9 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  // Estrategia: Network First, falling back to cache
+  const url = e.request.url;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+
   e.respondWith(
     fetch(e.request)
       .then((res) => {

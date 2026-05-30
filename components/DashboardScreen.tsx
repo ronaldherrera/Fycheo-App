@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useState, useContext, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { AppContext } from "../App";
+import { useNotifications } from "../contexts/NotificationsContext";
 import { supabase } from "../services/supabase";
 import { DEFAULT_AVATAR } from "../constants";
 import { Logo } from "./Logo";
@@ -165,6 +166,7 @@ const colorClasses = (
 const DashboardScreen: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useContext(AppContext);
+  const { total: notifTotal } = useNotifications();
 
   // Estado visual
   const [status, setStatus] = useState<"working" | "break" | "out" | "others">("out");
@@ -463,6 +465,7 @@ const DashboardScreen: React.FC = () => {
 
   const [loadingEntries, setLoadingEntries] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [registering, setRegistering] = useState<string | null>(null);
   const [message, setMessage] = useState<{
     type: "error" | "success";
     text: string;
@@ -1523,13 +1526,19 @@ const DashboardScreen: React.FC = () => {
         </div>
 
         {/* Derecha: Avatar */}
-        <img
-          src={user.user_metadata?.avatar_url || DEFAULT_AVATAR}
-          alt="Perfil"
-          onError={(e: React.SyntheticEvent<HTMLImageElement>) => { e.currentTarget.src = DEFAULT_AVATAR; }}
-          onClick={() => navigate("/profile")}
-          className="rounded-full size-10 shadow-sm border-2 border-primary/20 cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all object-cover"
-        />
+        <div className="relative cursor-pointer" onClick={() => navigate("/profile")}>
+          <img
+            src={user.user_metadata?.avatar_url || DEFAULT_AVATAR}
+            alt="Perfil"
+            onError={(e: React.SyntheticEvent<HTMLImageElement>) => { e.currentTarget.src = DEFAULT_AVATAR; }}
+            className="rounded-full size-10 shadow-sm border-2 border-primary/20 hover:ring-2 hover:ring-primary/40 transition-all object-cover"
+          />
+          {notifTotal > 0 && (
+            <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[10px] font-bold shadow-md">
+              {notifTotal > 99 ? '99+' : notifTotal}
+            </span>
+          )}
+        </div>
       </header>
 
       {/* AVISOS */}
@@ -1683,12 +1692,14 @@ const DashboardScreen: React.FC = () => {
           <button
             disabled={!canClockIn}
             onClick={async () => {
+              setRegistering("clock-in");
               const ok = await quickRegister("clock-in");
+              setRegistering(null);
               if (ok) handleAction("working");
             }}
             className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all ring-4
               ${
-                canClockIn
+                canClockIn && !registering
                   ? `bg-primary shadow-lg shadow-primary/20 ${
                       status === "working"
                         ? "ring-primary/40"
@@ -1698,24 +1709,26 @@ const DashboardScreen: React.FC = () => {
               }`}
           >
             <div className="size-10 rounded-full flex items-center justify-center bg-white/10">
-              <span className="material-symbols-outlined text-2xl text-white">
-                login
+              <span className={`material-symbols-outlined text-2xl text-white ${registering === "clock-in" ? "animate-spin" : ""}`}>
+                {registering === "clock-in" ? "progress_activity" : "login"}
               </span>
             </div>
             <span className="font-bold text-sm tracking-wide text-white text-center">
-              ENTRADA
+              {registering === "clock-in" ? "FICHANDO" : "ENTRADA"}
             </span>
           </button>
 
           <button
             disabled={!canClockOut}
             onClick={async () => {
+              setRegistering("clock-out");
               const ok = await quickRegister("clock-out");
+              setRegistering(null);
               if (ok) handleAction("out");
             }}
             className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all
               ${
-                canClockOut
+                canClockOut && !registering
                   ? `shadow-sm cursor-pointer bg-slate-600 dark:bg-slate-700 ${
                       status === "out"
                         ? "ring-4 ring-slate-400/20"
@@ -1725,24 +1738,26 @@ const DashboardScreen: React.FC = () => {
               }`}
           >
             <div className="size-10 rounded-full flex items-center justify-center bg-white/10">
-              <span className="material-symbols-outlined text-2xl text-white">
-                logout
+              <span className={`material-symbols-outlined text-2xl text-white ${registering === "clock-out" ? "animate-spin" : ""}`}>
+                {registering === "clock-out" ? "progress_activity" : "logout"}
               </span>
             </div>
             <span className="font-bold text-sm tracking-wide text-white text-center">
-              SALIDA
+              {registering === "clock-out" ? "FICHANDO" : "SALIDA"}
             </span>
           </button>
 
           <button
             disabled={!canBreakStart}
             onClick={async () => {
+              setRegistering("break-start");
               const ok = await quickRegister("break-start");
+              setRegistering(null);
               if (ok) handleAction("break");
             }}
             className={`group flex flex-col items-center justify-center gap-2 p-5 rounded-xl transition-all ring-4
               ${
-                canBreakStart
+                canBreakStart && !registering
                   ? `bg-amber-500 shadow-lg shadow-amber-500/20 ${
                       status === "break"
                         ? "ring-amber-500/40"
@@ -1752,12 +1767,12 @@ const DashboardScreen: React.FC = () => {
               }`}
           >
             <div className="size-10 rounded-full flex items-center justify-center bg-white/10">
-              <span className="material-symbols-outlined text-2xl text-white">
-                coffee
+              <span className={`material-symbols-outlined text-2xl text-white ${registering === "break-start" ? "animate-spin" : ""}`}>
+                {registering === "break-start" ? "progress_activity" : "coffee"}
               </span>
             </div>
             <span className="font-bold text-sm tracking-wide leading-none text-center text-white">
-              DESCANSO
+              {registering === "break-start" ? "FICHANDO" : "DESCANSO"}
             </span>
           </button>
 
@@ -1895,28 +1910,24 @@ const DashboardScreen: React.FC = () => {
                     <div
                       key={e.id}
                       onClick={async () => {
-                         // ALerta: Usuario quiere que al terminar descanso se registre "Entrada trabajo" (clock-in)
-                         // y aparezca la tarjeta azul normal.
-                         // Usamos quickRegister("clock-in") directamente.
+                         if (registering) return;
+                         setRegistering("break-end");
                          const ok = await quickRegister("clock-in");
+                         setRegistering(null);
                          if (ok) handleAction("working");
                       }}
-                      className="group flex items-center gap-4 p-3 rounded-xl border-l-4 border-amber-500 bg-amber-500 shadow-md shadow-amber-500/20 cursor-pointer animate-fadeInUp active:scale-[0.99]"
+                      className={`group flex items-center gap-4 p-3 rounded-xl border-l-4 border-amber-500 bg-amber-500 shadow-md shadow-amber-500/20 animate-fadeInUp active:scale-[0.99] ${registering ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
                       style={{ animationDelay: `${idx * 0.05}s`, animationFillMode: 'both' }}
                     >
-                      <div
-                        className="size-10 rounded-full bg-black/10 flex items-center justify-center shrink-0 group-hover:bg-black/20 transition-colors"
-                      >
-                        <span
-                          className="material-symbols-outlined text-xl text-slate-900"
-                        >
-                          play_arrow
+                      <div className="size-10 rounded-full bg-black/10 flex items-center justify-center shrink-0 group-hover:bg-black/20 transition-colors">
+                        <span className={`material-symbols-outlined text-xl text-slate-900 ${registering === "break-end" ? "animate-spin" : ""}`}>
+                          {registering === "break-end" ? "progress_activity" : "play_arrow"}
                         </span>
                       </div>
 
                       <div className="flex-1 flex justify-center">
                         <p className="font-bold text-slate-900 text-base">
-                          Terminar descanso
+                          {registering === "break-end" ? "Fichando" : "Terminar descanso"}
                         </p>
                       </div>
 
@@ -2151,18 +2162,14 @@ const DashboardScreen: React.FC = () => {
             <button
               onClick={() => {
                 const now = new Date();
-
-                // 1) poner fecha/hora “de ahora” SIEMPRE al abrir
                 setEntryDate(isoDate(now));
                 setEntryTime(nowHHMM());
                 setDateTimeTouched(false);
                 setInitialEntryDate(isoDate(now));
                 setInitialEntryTime(nowHHMM());
-                // 3) tipo recomendado según estado actual
                 if (liveMode === "out") setEntryType("clock-in");
                 else if (liveMode === "working") setEntryType("clock-out");
                 else if (liveMode === "break") setEntryType("break-end");
-
                 setShowModal(true);
               }}
               className="size-16 rounded-full bg-primary text-white shadow-xl shadow-primary/30 flex items-center justify-center border-4 border-background-light dark:border-background-dark active:scale-90 transition-transform cursor-pointer"
@@ -2175,9 +2182,7 @@ const DashboardScreen: React.FC = () => {
             onClick={() => navigate("/history")}
             className="flex flex-col items-center justify-center w-full h-full gap-1 text-slate-400 dark:text-slate-500 hover:text-primary transition-colors"
           >
-            <span className="material-symbols-outlined text-[26px]">
-              calendar_month
-            </span>
+            <span className="material-symbols-outlined text-[26px]">calendar_month</span>
             <span className="text-[10px] font-medium">Historial</span>
           </button>
         </div>
